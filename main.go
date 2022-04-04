@@ -7,7 +7,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path"
 	"strings"
+
+	assetfs "github.com/elazarl/go-bindata-assetfs"
+	"github.com/go-programming-tour-book/tag-service/pkg/swagger"
 
 	pb "github.com/go-programming-tour-book/tag-service/proto"
 	"github.com/go-programming-tour-book/tag-service/server"
@@ -49,19 +53,48 @@ func RunServer(port string) error {
 
 func runHttpServer() *http.ServeMux {
 	serveMux := http.NewServeMux()
-	serveMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+	serveMux.HandleFunc("ping", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("pong"))
+	})
+
+	prefix := "/swagger-ui/"
+	fileServer := http.FileServer(&assetfs.AssetFS{
+		Asset: swagger.Asset,
+		AssetDir: swagger.AssetDir,
+		Prefix: "third_party/swagger-ui",
+	})
+	serveMux.Handle(prefix, http.StripPrefix(prefix, fileServer))
+	serveMux.HandleFunc("/swagger/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "swagger.json") {
+			http.NotFound(w, r)
+			return
+		}
+
+		p := strings.TrimPrefix(r.URL.Path, "/swagger/")
+		p = path.Join("proto", p)
+
+		http.ServeFile(w, r, p)
 	})
 
 	return serveMux
 }
 
 func runGrpcServer() *grpc.Server {
-	s := grpc.NewServer()
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(HelloInterceptor),
+	}
+	s := grpc.NewServer(opts...)
 	pb.RegisterTagServiceServer(s, server.NewTagServer())
 	reflection.Register(s)
 
 	return s
+}
+
+func HelloInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	log.Println("Hello")
+	resp, err := handler(ctx, req)
+	log.Println("bey")
+	return resp, err
 }
 
 func runGrpcGatewayServer() *runtime.ServeMux {
