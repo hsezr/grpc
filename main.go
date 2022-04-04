@@ -53,7 +53,7 @@ func RunServer(port string) error {
 
 func runHttpServer() *http.ServeMux {
 	serveMux := http.NewServeMux()
-	serveMux.HandleFunc("ping", func(w http.ResponseWriter, r *http.Request) {
+	serveMux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("pong"))
 	})
 
