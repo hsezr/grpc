@@ -11,10 +11,13 @@ import (
 	"strings"
 
 	assetfs "github.com/elazarl/go-bindata-assetfs"
+	"github.com/go-programming-tour-book/tag-service/internal/middleware"
 	"github.com/go-programming-tour-book/tag-service/pkg/swagger"
 
 	pb "github.com/go-programming-tour-book/tag-service/proto"
 	"github.com/go-programming-tour-book/tag-service/server"
+	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
+	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -59,9 +62,9 @@ func runHttpServer() *http.ServeMux {
 
 	prefix := "/swagger-ui/"
 	fileServer := http.FileServer(&assetfs.AssetFS{
-		Asset: swagger.Asset,
+		Asset:    swagger.Asset,
 		AssetDir: swagger.AssetDir,
-		Prefix: "third_party/swagger-ui",
+		Prefix:   "third_party/swagger-ui",
 	})
 	serveMux.Handle(prefix, http.StripPrefix(prefix, fileServer))
 	serveMux.HandleFunc("/swagger/", func(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +84,11 @@ func runHttpServer() *http.ServeMux {
 
 func runGrpcServer() *grpc.Server {
 	opts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(HelloInterceptor),
+		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			middleware.AccessLog,
+			middleware.ErrorLog,
+			middleware.Recovery,
+		)),
 	}
 	s := grpc.NewServer(opts...)
 	pb.RegisterTagServiceServer(s, server.NewTagServer())
@@ -90,18 +97,29 @@ func runGrpcServer() *grpc.Server {
 	return s
 }
 
-func HelloInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	log.Println("Hello")
-	resp, err := handler(ctx, req)
-	log.Println("bey")
-	return resp, err
-}
-
 func runGrpcGatewayServer() *runtime.ServeMux {
 	endPoint := "0.0.0.0:" + port
 	runtime.HTTPError = grpcGatewayError
 	gwmux := runtime.NewServeMux()
 	dopts := []grpc.DialOption{grpc.WithInsecure()}
+	dopts = append(dopts, grpc.WithUnaryInterceptor(
+		grpc_middleware.ChainUnaryClient(
+			grpc_retry.UnaryClientInterceptor(
+				grpc_retry.WithMax(2),
+				grpc_retry.WithCodes(
+					codes.Unknown,
+					codes.Internal,
+					codes.DeadlineExceeded,
+				),
+			),
+			middleware.UnaryContextTimeout(),
+		),
+	))
+	dopts = append(dopts, grpc.WithStreamInterceptor(
+		grpc_middleware.ChainStreamClient(
+			middleware.StreamContextTimeout(),
+		),
+	))
 	_ = pb.RegisterTagServiceHandlerFromEndpoint(context.Background(), gwmux, endPoint, dopts)
 
 	return gwmux
